@@ -1,0 +1,79 @@
+# ==============================================================================
+# CCTV SURVEILLANCE - GPU-ACCELERATED PRODUCTION REQUIREMENTS
+# ==============================================================================
+# PyTorch CUDA Wheel Repository
+# Tells pip to download NVIDIA CUDA 12.4-enabled binaries instead of default CPU wheels.
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+# ------------------------------------------------------------------------------
+# 1. CORE GPU DEEP LEARNING ENGINES
+# ------------------------------------------------------------------------------
+# PyTorch with CUDA compute support: powers YOLOv8, Zero-DCE, OSNet, and OpenGait
+torch
+torchvision
+
+# ONNX Runtime with NVIDIA CUDA Provider: powers InsightFace (RetinaFace & ArcFace)
+onnxruntime-gpu
+
+# ------------------------------------------------------------------------------
+# 2. NUMERICAL & IMAGE PROCESSING (STABILITY PINS)
+# ------------------------------------------------------------------------------
+# Pin NumPy < 2.0 to prevent C-API breaking changes with InsightFace, TorchVision, and OpenCV
+numpy<2.0.0,>=1.26.0
+scipy
+opencv-python
+
+# ------------------------------------------------------------------------------
+# 3. PIP INSTALLED AI MODELS (YOLO, DeepSORT, InsightFace)
+# ------------------------------------------------------------------------------
+# YOLOv8 Person Detector (GPU)
+ultralytics
+
+# Multi-Object Tracking (Kalman filter)
+deep-sort-realtime
+
+# FaceNet PyTorch alternative prototype
+facenet-pytorch
+
+# Face Analysis (RetinaFace + ArcFace)
+# WARNING FOR PYTHON 3.12 ON WINDOWS: 
+# If 'pip install insightface' fails with C++ compiler errors, you must manually download 
+# and install a pre-compiled wheel from community repositories (e.g., insightface-0.7.3-cp312-cp312-win_amd64.whl)
+insightface
+
+# ------------------------------------------------------------------------------
+# 4. MANUALLY INSTALLED AI MODELS (TorchReID & OpenGait)
+# ------------------------------------------------------------------------------
+# These models must be cloned manually into the project workspace. Do NOT attempt 
+# to pip install them directly as they often trigger fatal C++ build errors on Windows/Python 3.12.
+#
+# >> INSTRUCTIONS FOR TORCHREID (Appearance Re-ID):
+# 1. Download: https://github.com/KaiyangZhou/deep-person-reid/archive/refs/heads/master.zip
+# 2. Extract the ZIP and place the internal 'torchreid' folder directly into your project root.
+# 3. These are the dependencies required by TorchReID:
+gdown
+yacs
+tensorboard
+tb-nightly
+
+# >> INSTRUCTIONS FOR OPENGAIT (Gait Recognition):
+# 1. Download: https://github.com/ShiqiYu/OpenGait/archive/refs/heads/master.zip
+# 2. Extract the ZIP and place the internal 'OpenGait' folder directly into your project root.
+# 3. These are the dependencies required by OpenGait:
+einops
+pyyaml
+
+# ------------------------------------------------------------------------------
+# 5. DATABASE & BACKEND SERVICES
+# ------------------------------------------------------------------------------
+# Local Qdrant Vector Database
+qdrant-client
+
+# REST API & Web Dashboard Backend
+fastapi
+uvicorn
+python-multipart
+pydantic
+
+# System Resource Monitoring
+psutil

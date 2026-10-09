@@ -1,0 +1,222 @@
+# ============================================================
+# Model Weights & Checkpoints
+# ============================================================
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+*.weights
+*.h5
+*.hdf5
+*.pb
+*.tflite
+*.caffemodel
+*.prototxt.bak
+*.ckpt
+*.ckpt.*
+*.index
+*.meta
+checkpoint
+
+# Entire OpenGait directory (submodule with its own repo, weights, datasets)
+OpenGait/
+
+# ============================================================
+# Large Data Files & Media
+# ============================================================
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
+*.tiff
+*.npy
+*.npz
+*.csv
+*.parquet
+*.feather
+
+# Data directories
+data/videos/
+data/temp_uploads/
+data/raw/
+data/processed/
+
+# (OpenGait fully ignored above)
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+MANIFEST
+
+# Virtual Environments
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+
+# Distribution / packaging
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytest_cache/
+
+
+
+# ============================================================
+# Logs & Temporary Files
+# ============================================================
+*.log
+*.log.*
+logs/
+log/
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+# ============================================================
+# Database Files
+# ============================================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================
+# IDE & Editor Files
+# ============================================================
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Spyder
+.spyderproject.db
+.spyproject
+
+# ============================================================
+# OS Files
+# ============================================================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+
+# ============================================================
+# Environment & Secrets
+# ============================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets.yaml
+secrets.yml
+config.local.*
+
+# ============================================================
+# Frontend (Vite / Node)
+# ============================================================
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# ============================================================
+# Misc Project-Specific
+# ============================================================
+# Keep data folder structure but not contents
+!data/.gitkeep
+!data/videos/.gitkeep
+!data/temp_uploads/.gitkeep
+
+
+commands.txt
+pyrightconfig.json
+qdrant_db/
+pyrightconfig.json
+
+# ============================================================
+# Reference Repos (external, not tracked)
+# ============================================================
+reference/
