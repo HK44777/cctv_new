@@ -173,7 +173,8 @@ class RetrievalService:
         """
         Second pass: extract biometric embeddings for the selected target.
         Seeks directly to only the frames where the target was tracked (no full
-        sequential scan), making this significantly faster than reading every frame.
+        sequential scan). All crops are read first, then batched GPU inference is
+        run in one shot — one call for Appearance, one YOLO batch call for Skeleton.
         """
         if session_id not in self._tracking_cache or track_id not in self._tracking_cache[session_id]:
             print(f"Error: No tracking data for session {session_id}, track {track_id}")
@@ -183,39 +184,54 @@ class RetrievalService:
 
         cap = cv2.VideoCapture(video_path)
 
-        app_vectors  = []
-        face_vectors = []
-        skeletons    = []
+        # ── Pass 1: read all crops from disk ──────────────────────────────────────
+        # We separate "heavy" frames (every 6th, for Appearance + Face) from "all"
+        # frames (for Skeleton, which needs every frame for the walking sequence).
+        heavy_crops = []   # 1-FPS crops  → Appearance + Face
+        all_crops   = []   # 6-FPS crops  → Skeleton
 
-        # Seek directly to each tracked frame instead of reading every frame sequentially.
-        # This is far faster for sparse tracking histories in long videos.
         for i, (frame_idx, bbox) in enumerate(target_history):
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if not ret:
+                all_crops.append(None)
                 continue
 
             x1, y1, x2, y2 = bbox
             crop = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
+            if crop.size == 0:
+                all_crops.append(None)
+                continue
 
-            if crop.size > 0:
-                # OPTIMIZATION: Subsample heavy extractors (Appearance & Face) to 1 FPS.
-                # Since the tracking history is at 6 FPS, we only run these every 6th frame.
-                if i % 6 == 0:
-                    app_vec = self.app_ext.extract(crop)
-                    if app_vec is not None:
-                        app_vectors.append(app_vec)
+            all_crops.append(crop)
 
-                    face_vec = self.face_ext.extract(crop)
-                    if face_vec is not None:
-                        face_vectors.append(face_vec)
-
-                # SkeletonGait still needs every frame to build its walking sequence
-                skeleton = self.gait_ext.extract_skeleton(crop)
-                if skeleton is not None:
-                    skeletons.append(skeleton)
+            # Subsample: appearance & face only every 6th frame (1 FPS)
+            if i % 6 == 0:
+                heavy_crops.append(crop)
 
         cap.release()
+
+        # ── Pass 2: batch GPU inference ───────────────────────────────────────────
+
+        # Appearance — one GPU forward pass for all heavy crops at once
+        app_vectors = []
+        if heavy_crops:
+            app_batch = self.app_ext.extract_batch(heavy_crops)
+            app_vectors = [v for v in app_batch if v is not None]
+
+        # Face — InsightFace does not support true batching; loop per-crop
+        face_vectors = []
+        for crop in heavy_crops:
+            fv = self.face_ext.extract(crop)
+            if fv is not None:
+                face_vectors.append(fv)
+
+        # Skeleton — one YOLO batch call for all frames
+        skeletons = []
+        valid_all_crops = [c for c in all_crops if c is not None]
+        if valid_all_crops:
+            skel_batch = self.gait_ext.extract_skeleton_batch(valid_all_crops)
+            skeletons  = [s for s in skel_batch if s is not None]
 
         # Aggregate embeddings via L2-normalised mean (see _l2_norm_mean)
         final_app  = self._l2_norm_mean(app_vectors)
