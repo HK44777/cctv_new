@@ -54,3 +54,40 @@ class FaceExtractor:
         embedding = best_face.embedding  # (512,) numpy array, already L2-normalized by buffalo_l internally
 
         return embedding.tolist()
+
+    def extract_batch(self, crops):
+        """
+        Returns a list of 512-dimensional face vectors for multiple crops (pseudo-batch).
+        If no valid face is found across all crops, returns None.
+        """
+        if not crops:
+            return None
+
+        embeddings = []
+        for person_crop in crops:
+            if person_crop.size == 0 or person_crop.shape[0] < 10 or person_crop.shape[1] < 10:
+                continue
+
+            faces = self.app.get(person_crop)
+            if not faces:
+                continue
+
+            best_face = faces[0]
+            if len(faces) > 1:
+                max_area = 0
+                for face in faces:
+                    x1, y1, x2, y2 = face.bbox
+                    area = (x2 - x1) * (y2 - y1)
+                    if area > max_area:
+                        max_area = area
+                        best_face = face
+
+            if hasattr(best_face, 'det_score') and best_face.det_score < 0.75:
+                continue
+
+            embeddings.append(best_face.embedding.tolist())
+
+        if not embeddings:
+            return None
+
+        return embeddings
