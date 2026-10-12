@@ -110,10 +110,13 @@ def run_model_evaluation(model_type: str, gallery_tracklets, query_tracklets):
         extract_fn = lambda paths: extract_ours_gait(ext, paths, min_skeletons=15)
         label = "YOUR SKELETONGAIT PIPELINE (src/)"
     else:
+        import importlib.util
         project_dir = os.path.join(ROOT_DIR, "Project")
-        sys.path.insert(0, project_dir)
-        from src.features.gait_embedder import GaitEmbedder
-        sys.path.pop(0)
+        gait_file = os.path.join(project_dir, "src", "features", "gait_embedder.py")
+        spec = importlib.util.spec_from_file_location("project_gait_embedder", gait_file)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        GaitEmbedder = mod.GaitEmbedder
 
         cfg_file = os.path.join(project_dir, "config", "default.yaml")
         with open(cfg_file, "r") as f:

@@ -48,8 +48,7 @@ class ScoreFusion:
             elif has_face and not has_app and not has_gait:
                 final_score = face_score
             elif has_app and not has_face and not has_gait:
-                # Appearance-only penalty (e.g., 0.85 multiplier) to prevent confusers
-                final_score = app_score * 0.85
+                final_score = app_score
             else:
                 # Fallback for any other combination
                 total_w = sum([self.W_FACE if has_face else 0, 

@@ -32,6 +32,15 @@ class TrackManager:
             arr = arr / norm
         return arr.tolist()
 
+    @staticmethod
+    def format_cctv_time(seconds_offset: float, base_hour: int = 8) -> str:
+        """Formats an offset in seconds from base_hour (08:00:00 AM) to HH:MM:SS."""
+        total_sec = base_hour * 3600 + max(0.0, float(seconds_offset or 0.0))
+        h = int((total_sec // 3600) % 24)
+        m = int((total_sec % 3600) // 60)
+        s = int(total_sec % 60)
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
     def register_frame_data(self, track_id, appearance, face, skeleton, metadata, video_path=None, frame_idx=None, bbox=None):
         """
         Step 5, 6, 7: Append per-frame data to RAM buffers (Optimized to Running Average)
@@ -41,6 +50,10 @@ class TrackManager:
             if video_path:
                 meta["source_video_path"] = video_path
             meta["bounding_boxes"] = {}
+            t_start = metadata.get("timestamp", 0.0)
+            meta["start_time_str"] = self.format_cctv_time(t_start)
+            meta["end_time_str"] = self.format_cctv_time(t_start)
+            meta["video_start_time"] = "08:00:00"
             self.active_tracks[track_id] = {
                 "appearances": {"mean": None, "count": 0},
                 "faces": {"mean": None, "count": 0},
@@ -59,7 +72,10 @@ class TrackManager:
             track["skeletons"].append(skeleton)
             
         # Update end time
-        track["metadata"]["end_time"] = metadata.get("timestamp")
+        cur_t = metadata.get("timestamp")
+        track["metadata"]["end_time"] = cur_t
+        if cur_t is not None:
+            track["metadata"]["end_time_str"] = self.format_cctv_time(cur_t)
         
         if frame_idx is not None and bbox is not None:
             track["metadata"]["bounding_boxes"][str(frame_idx)] = bbox
@@ -128,7 +144,9 @@ class TrackManager:
                 gait=final_gait,
                 metadata=track["metadata"]
             )
-            print(f"Track closed and saved to DB. TrackID: {track_id} -> UUID: {global_id}")
+            start_str = track["metadata"].get("start_time_str", "08:00:00")
+            end_str = track["metadata"].get("end_time_str", "08:00:00")
+            print(f"Track closed and saved to DB. TrackID: {track_id} [{start_str} - {end_str}] -> UUID: {global_id}")
             
         # Cleanup RAM
         del self.active_tracks[track_id]

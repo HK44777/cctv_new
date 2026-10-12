@@ -7,26 +7,38 @@ import uuid
 import yaml
 import numpy as np
 import re
+import gc
+import torch
 from collections import defaultdict
 from tqdm import tqdm
+
+# Persistent worker pool to avoid recreating threads 8,000+ times
+EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
 # Ensure workspace root is in sys.path
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-# Safely import the Project modules by prepending Project to sys.path
-PROJECT_DIR = os.path.join(ROOT_DIR, 'Project')
-sys.path.insert(0, PROJECT_DIR)
+import importlib.util
 
-from src.features import FaceEmbedder, BodyEmbedder, GaitEmbedder
-
-# Restore sys.path
-sys.path.pop(0)
-
-# Import root modules
+# Ensure root modules are imported cleanly
 from src.database.qdrant_client import DatabaseClient
 from src.core.fusion import ScoreFusion
+
+# Dynamically import Project feature embedders without colliding with root 'src'
+PROJECT_DIR = os.path.join(ROOT_DIR, 'Project')
+
+def _load_project_class(module_rel_path: str, class_name: str):
+    file_path = os.path.join(PROJECT_DIR, module_rel_path)
+    spec = importlib.util.spec_from_file_location(f"project_{class_name}", file_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return getattr(mod, class_name)
+
+FaceEmbedder = _load_project_class(os.path.join("src", "features", "face_embedder.py"), "FaceEmbedder")
+BodyEmbedder = _load_project_class(os.path.join("src", "features", "body_embedder.py"), "BodyEmbedder")
+GaitEmbedder = _load_project_class(os.path.join("src", "features", "gait_embedder.py"), "GaitEmbedder")
 
 print("Loading Project Config...")
 config_path = os.path.join(PROJECT_DIR, 'config', 'default.yaml')
@@ -42,7 +54,7 @@ body_ext = BodyEmbedder(config)
 gait_ext = GaitEmbedder(config)
 
 print("Initializing Local Qdrant Database...")
-db = DatabaseClient()
+db = DatabaseClient(collection_name="project_persons", gait_dim=128)
 # Create a ScoreFusion module with the same matching weights as Project
 fusion_weights = config.get("matching", {}).get("weights", {"face": 0.5, "body": 0.35, "gait": 0.15})
 fusion = ScoreFusion()
@@ -127,22 +139,27 @@ def extract_tracklet_features(image_paths):
         return None
 
     def process_face():
-        face_vectors = face_ext.extract_batch(sampled_images)
-        if face_vectors is not None and len(face_vectors) > 0:
+        face_vectors = []
+        for img in sampled_images:
+            f_vec = face_ext.extract(img)
+            if f_vec is not None:
+                face_vectors.append(f_vec)
+        if face_vectors and len(face_vectors) > 0:
             mean_face = np.mean(face_vectors, axis=0)
-            return (mean_face / np.linalg.norm(mean_face)).tolist()
+            norm = np.linalg.norm(mean_face)
+            if norm > 0:
+                return (mean_face / norm).tolist()
         return None
 
-    # --- EXECUTE TASKS IN PARALLEL ---
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        future_gait = executor.submit(process_gait)
-        future_app = executor.submit(process_appearance)
-        future_face = executor.submit(process_face)
+    # --- EXECUTE TASKS IN PARALLEL (reusing persistent thread pool) ---
+    future_gait = EXECUTOR.submit(process_gait)
+    future_app = EXECUTOR.submit(process_appearance)
+    future_face = EXECUTOR.submit(process_face)
 
-        final_gait = future_gait.result()
-        final_app = future_app.result()
-        final_face = future_face.result()
-        
+    final_gait = future_gait.result()
+    final_app = future_app.result()
+    final_face = future_face.result()
+    
     return final_app, final_face, final_gait
 
 def main():
@@ -158,27 +175,66 @@ def main():
     db._ensure_collection()
     print("✅ Collection reset. Starting fresh ingestion.")
 
-    print(f"Found {len(gallery_tracklets)} tracklets in Gallery. Starting Ingestion...")
-    for (pid, cid, tid), img_paths in tqdm(gallery_tracklets.items()):
+    BATCH_SIZE = 100
+    batch_points = []
+    print(f"Found {len(gallery_tracklets)} tracklets in Gallery. Starting Ingestion (Batched)...")
+    for idx, ((pid, cid, tid), img_paths) in enumerate(tqdm(gallery_tracklets.items(), desc="Ingesting Gallery"), start=1):
         app, face, gait = extract_tracklet_features(img_paths)
         if app or face or gait:
             metadata = {"person_id": pid, "camera_id": cid, "tracklet_id": tid, "is_gallery": True}
-            db.insert(uuid=str(uuid.uuid4()), appearance=app, face=face, gait=gait, metadata=metadata)
+            batch_points.append({
+                "uuid": str(uuid.uuid4()),
+                "appearance": app,
+                "face": face,
+                "gait": gait,
+                "metadata": metadata
+            })
+            if len(batch_points) >= BATCH_SIZE:
+                db.insert_batch(batch_points)
+                batch_points.clear()
+
+        # Periodic VRAM & memory flush every 100 tracklets
+        if idx % 100 == 0:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
+
+    if batch_points:
+        db.insert_batch(batch_points)
+        batch_points.clear()
     print("✅ Gallery Ingestion Complete!\n")
+
+    # Ground truth: Count valid gallery tracklets per person per camera for official Re-ID mAP
+    gallery_rel_count = defaultdict(lambda: defaultdict(int))
+    for (g_pid, g_cid, _) in gallery_tracklets.keys():
+        gallery_rel_count[g_pid][g_cid] += 1
 
     query_tracklets = group_tracklets('query')
     print(f"Found {len(query_tracklets)} tracklets in Query set. Starting Evaluation...")
     rank1_hits, rank5_hits, rank10_hits, total_queries = 0, 0, 0, 0
     ap_scores = []
 
-    for (q_pid, q_cid, q_tid), img_paths in tqdm(query_tracklets.items()):
+    for idx, ((q_pid, q_cid, q_tid), img_paths) in enumerate(tqdm(query_tracklets.items(), desc="Evaluating Queries"), start=1):
+        if idx % 100 == 0:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
+        # Exclude queries where the person does not exist in any other camera in gallery
+        total_rel_in_gallery = sum(
+            count for g_cid, count in gallery_rel_count[q_pid].items() if g_cid != q_cid
+        )
+        if total_rel_in_gallery == 0:
+            continue
+
         app, face, gait = extract_tracklet_features(img_paths)
         if not app and not face and not gait:
             continue
 
-        search_results = db.search_ensemble(query_appearance=app, query_face=face, query_gait=gait, limit=50)
+        # Retrieve all gallery tracklets to evaluate full ranking without truncation
+        search_results = db.search_ensemble(query_appearance=app, query_face=face, query_gait=gait, limit=len(gallery_tracklets))
         formatted_results = fusion.format_results(search_results, min_threshold=0.0)
 
+        # Filter out same-camera junk
         filtered_results = []
         for res in formatted_results:
             g_pid = res["metadata"]["person_id"]
@@ -186,19 +242,6 @@ def main():
             if g_pid == q_pid and g_cid == q_cid:
                 continue
             filtered_results.append(res)
-
-        if not filtered_results:
-            continue
-
-        # Count total relevant gallery items for this query person (excluding same-cam junk)
-        # Denominator for correct mAP: AP = sum(P@k * rel_k) / num_relevant_in_gallery
-        num_relevant = sum(
-            1 for res in formatted_results
-            if res["metadata"]["person_id"] == q_pid
-            and res["metadata"]["camera_id"] != q_cid  # exclude same-cam junk
-        )
-        if num_relevant == 0:
-            continue
 
         total_queries += 1
         matches = [res["metadata"]["person_id"] == q_pid for res in filtered_results]
@@ -208,13 +251,15 @@ def main():
             if any(matches[:5]): rank5_hits += 1
             if any(matches[:10]): rank10_hits += 1
 
-            # Standard AP: sum of (precision@k * relevance@k) / total_relevant_in_gallery
+            # Standard AP: sum of (precision@k * relevance@k) / total_rel_in_gallery
             correct_count, precision_sum = 0, 0.0
             for k, is_match in enumerate(matches):
                 if is_match:
                     correct_count += 1
                     precision_sum += correct_count / (k + 1)
-            ap_scores.append(precision_sum / num_relevant)
+            ap_scores.append(precision_sum / total_rel_in_gallery)
+        else:
+            ap_scores.append(0.0)
 
     print("\n" + "="*45)
     print(" 🏆 FINAL MARS EVALUATION METRICS (BASE PROJECT) 🏆")

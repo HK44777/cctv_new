@@ -14,34 +14,75 @@ from evaluations.common import parse_market1501_filename, compute_reid_metrics, 
 
 
 def find_market_dir() -> str:
-    """Finds Market-1501 dataset directory from standard locations."""
+    """
+    Finds Market-1501 dataset directory across standard locations, workspace paths,
+    and dynamic directory searches (including zip extraction variations).
+    """
+    # 1. Direct standard candidates
     candidates = [
         "C:/Users/PC1/Downloads/Market-1501-v15.09.15",
+        "C:/Users/PC1/Downloads/Market-1501",
+        "C:/Users/PC1/Downloads/mars_dataset/OneDrive_1_2022-4-2/Market-1501-v15.09.15",
+        "C:/Users/PC1/Downloads/mars_dataset/Market-1501-v15.09.15",
+        os.path.join(ROOT_DIR, "Market-1501-v15.09.15"),
         os.path.join(ROOT_DIR, "data", "Market-1501-v15.09.15"),
         os.path.join(ROOT_DIR, "data", "Market-1501"),
-        os.path.join(ROOT_DIR, "Market-1501-v15.09.15"),
         os.path.expanduser("~/Downloads/Market-1501-v15.09.15"),
+        os.path.expanduser("~/Downloads/Market-1501"),
     ]
     for path in candidates:
-        if path and os.path.exists(os.path.join(path, "query")) and os.path.exists(os.path.join(path, "bounding_box_test")):
-            return path
+        if path and os.path.isdir(path):
+            if os.path.exists(os.path.join(path, "query")) and os.path.exists(os.path.join(path, "bounding_box_test")):
+                return path
+
+    # 2. Dynamic search across common download & workspace roots
+    search_roots = [
+        "C:/Users/PC1/Downloads",
+        "C:/Users/PC1/Downloads/mars_dataset",
+        "C:/Users/PC1/Downloads/mars_dataset/OneDrive_1_2022-4-2",
+        os.path.abspath(os.path.join(ROOT_DIR, "..")),
+        ROOT_DIR,
+    ]
+    for root in search_roots:
+        if not os.path.isdir(root):
+            continue
+        try:
+            for entry in os.listdir(root):
+                if "market" in entry.lower():
+                    full_p = os.path.join(root, entry)
+                    if os.path.isdir(full_p):
+                        # Direct match
+                        if os.path.exists(os.path.join(full_p, "query")) and os.path.exists(os.path.join(full_p, "bounding_box_test")):
+                            return full_p
+                        # Subdirectory match (e.g. nested folder from unzipping)
+                        for sub in os.listdir(full_p):
+                            sub_p = os.path.join(full_p, sub)
+                            if os.path.isdir(sub_p) and os.path.exists(os.path.join(sub_p, "query")) and os.path.exists(os.path.join(sub_p, "bounding_box_test")):
+                                return sub_p
+        except Exception:
+            pass
+
     return candidates[0]
 
 
 def extract_faces_from_folder(extractor: FaceExtractor, folder_path: str, desc: str = "Extracting Faces"):
-    images = glob.glob(os.path.join(folder_path, "*.jpg"))
-    images.sort()
+    if not os.path.exists(folder_path):
+        return np.array([]), np.array([]), np.array([]), 0.0, 0, 0
 
+    filenames = sorted(os.listdir(folder_path))
     feats, pids, cams = [], [], []
     total_samples = 0
     detected_faces = 0
 
-    for p in tqdm(images, desc=desc):
-        pid, cam = parse_market1501_filename(p)
+    for fname in tqdm(filenames, desc=desc):
+        if not fname.lower().endswith(('.jpg', '.jpeg', '.png')) or fname.startswith('._'):
+            continue
+        pid, cam = parse_market1501_filename(fname)
         if pid is None or cam is None:
             continue
         total_samples += 1
 
+        p = os.path.join(folder_path, fname)
         img = cv2.imread(p)
         if img is None:
             continue
@@ -66,11 +107,14 @@ def main():
     print(" 👤 EVALUATION: STANDALONE FACE (ARCFACE) ON MARKET-1501")
     print("=" * 65)
     print(f"Dataset root : {market_dir}")
+    print(f"Query dir    : {query_dir}")
+    print(f"Gallery dir  : {gallery_dir}")
     print(f"Hardware     : GPU STRICT (CUDA)")
     print(f"Sampling     : Single-frame crops (Market-1501 static images)")
 
     if not os.path.exists(query_dir) or not os.path.exists(gallery_dir):
         print(f"\n❌ Error: Could not find Market-1501 folders at '{market_dir}'.")
+        print("Please ensure Market-1501 is placed in your downloads or data folder.")
         sys.exit(1)
 
     # Strict GPU execution
@@ -86,6 +130,12 @@ def main():
     q_feats, q_pids, q_cams, q_det_rate, q_tot, q_det = extract_faces_from_folder(
         extractor, query_dir, desc="Query Evaluation (query)"
     )
+
+    # Filter out distractor queries if any
+    valid_q_mask = (q_pids != -1) & (q_pids != 0)
+    q_feats = q_feats[valid_q_mask]
+    q_pids = q_pids[valid_q_mask]
+    q_cams = q_cams[valid_q_mask]
 
     print("\n" + "-" * 55)
     print(" 👤 FACE DETECTION COVERAGE STATS (MARKET-1501)")

@@ -8,12 +8,13 @@ import torch.nn.functional as F
 def parse_market1501_filename(filename: str):
     """
     Parses Market-1501 filename pattern: [pid]_c[camid]s[seq]_[frame]_[idx].jpg
-    Returns: (pid, camid) or (None, None) if junk.
+    Returns: (pid, camid) or (None, None) if invalid junk file (e.g., ._).
+    Note: Distractor IDs (-1, 0000) are retained for gallery distractor filtering.
     """
     base = os.path.basename(filename)
-    if base.startswith("-1") or base.startswith("0000") or base.startswith("._"):
+    if base.startswith("._"):
         return None, None
-    pattern = re.compile(r"([-\d]+)_c(\d)")
+    pattern = re.compile(r"([-\d]+)_c(\d)", re.IGNORECASE)
     match = pattern.search(base)
     if match:
         pid = int(match.group(1))
@@ -97,14 +98,19 @@ def compute_reid_metrics(
     for i in range(num_q):
         q_pid = q_pids[i]
         q_cam = q_cams[i]
+
+        # Ignore distractor queries
+        if q_pid == -1 or q_pid == 0:
+            continue
+
         q_dist = dist_mat[i]
 
         sorted_indices = np.argsort(q_dist)
         sorted_pids = g_pids[sorted_indices]
         sorted_cams = g_cams[sorted_indices]
 
-        # Standard Re-ID evaluation: junk if same person in same camera
-        junk_mask = (sorted_pids == q_pid) & (sorted_cams == q_cam)
+        # Standard Re-ID evaluation: junk if same person in same camera, or distractor IDs (-1, 0)
+        junk_mask = ((sorted_pids == q_pid) & (sorted_cams == q_cam)) | (sorted_pids == -1) | (sorted_pids == 0)
         keep_mask = ~junk_mask
 
         matches = (sorted_pids[keep_mask] == q_pid).astype(np.int32)

@@ -4,6 +4,14 @@ import threading
 import queue
 from src.core.video_processor import VideoProcessor
 
+def format_cctv_time(seconds_offset: float, base_hour: int = 8) -> str:
+    """Formats an offset in seconds from base_hour (08:00:00 AM) to HH:MM:SS."""
+    total_sec = base_hour * 3600 + max(0.0, float(seconds_offset or 0.0))
+    h = int((total_sec // 3600) % 24)
+    m = int((total_sec % 3600) // 60)
+    s = int(total_sec % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
 def frame_producer(vid_file_path, cam_id, frame_queue):
     cap = cv2.VideoCapture(vid_file_path)
     if not cap.isOpened():
@@ -25,12 +33,17 @@ def frame_producer(vid_file_path, cam_id, frame_queue):
             break
             
         if frame_count % frame_interval == 0:
+            # Video starts recording at 08:00:00 AM; timestamp is elapsed seconds
             timestamp = frame_count / fps
             # Resize frame to save RAM and speed up CPU processing
             small_frame = cv2.resize(frame, (640, 480))
             
             # Put frame into queue as a plain tuple
             frame_queue.put((cam_id, small_frame, vid_file_path, frame_count, timestamp))
+            
+            # Periodic logging showing realistic 8:00-based CCTV time
+            if frame_count % (target_fps * 30) == 0:
+                print(f"[{cam_id}] Reading frame {frame_count} | CCTV Time: {format_cctv_time(timestamp)}")
             
         frame_count += 1
         
@@ -52,12 +65,14 @@ def frame_consumer(frame_queue, processor, total_producers):
         processor.process_frame(frame, cam_id, timestamp, vid_file_path, frame_count)
 
 def main():
-    print("Starting Offline Ingestion Phase...")
+    print("=" * 65)
+    print("Starting Offline Ingestion Phase (All CCTV Videos start: 08:00:00 AM)")
+    print("=" * 65)
     
     video_dir = "data/videos"
     if not os.path.exists(video_dir):
         os.makedirs(video_dir)
-        print(f"Please place your 4 video files in '{video_dir}' and run again.")
+        print(f"Please place your video files in '{video_dir}' and run again.")
         return
 
     videos = [

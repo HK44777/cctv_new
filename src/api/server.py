@@ -102,9 +102,10 @@ async def extract_target(request: TargetExtractionRequest):
 # Global dictionary to track where a client paused
 CLIENT_SESSIONS = {}
 
-async def generate_evidence_stream(video_path: str, boxes: dict, client_id: str = None):
+async def generate_evidence_stream(video_path: str, boxes: dict, client_id: str = None, cam_id: str = "Camera_1"):
     """
     Async MJPEG generator for the evidence playback endpoint.
+    Overlays CCTV time (starting from 08:00:00 AM), camera ID, and tracking bounding boxes.
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -148,11 +149,37 @@ async def generate_evidence_stream(video_path: str, boxes: dict, client_id: str 
             if str_idx in boxes:
                 last_box = boxes[str_idx]
 
+            # ── 1. Calculate CCTV timestamp starting from 08:00:00 AM ──
+            time_sec = current_frame / fps
+            total_sec = 8 * 3600 + time_sec
+            cur_h = int((total_sec // 3600) % 24)
+            cur_m = int((total_sec % 3600) // 60)
+            cur_s = int(total_sec % 60)
+            cur_ms = int((total_sec % 1) * 100)
+            time_display = f"{cur_h:02d}:{cur_m:02d}:{cur_s:02d}.{cur_ms:02d}"
+
+            # ── 2. Draw target bounding box and label ──
             if last_box:
-                x1, y1, x2, y2 = last_box
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 4)
-                cv2.putText(frame, "TARGET", (int(x1), int(y1) - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                x1, y1, x2, y2 = [int(v) for v in last_box]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = "TARGET IDENTIFIED"
+                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+                badge_y1 = max(0, y1 - th - 6)
+                badge_y2 = y1
+                cv2.rectangle(frame, (x1, badge_y1), (x1 + tw + 8, badge_y2), (0, 255, 0), -1)
+                cv2.putText(frame, label, (x1 + 4, y1 - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1, cv2.LINE_AA)
+
+            # ── 3. Draw CCTV OSD Header Banner ──
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, 0), (640, 32), (15, 23, 42), -1)
+            cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
+
+            # Red recording indicator dot
+            cv2.circle(frame, (16, 16), 4, (0, 0, 255), -1)
+            osd_text = f"REC  |  CAM: {cam_id}  |  TIME: {time_display}"
+            cv2.putText(frame, osd_text, (28, 21),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
 
             ret, buffer = cv2.imencode('.jpg', frame)
             if ret:
@@ -178,14 +205,19 @@ async def stream_evidence(uuid: str, client_id: Optional[str] = None):
     metadata   = point.payload or {}
     video_path = metadata.get("source_video_path")
     boxes      = metadata.get("bounding_boxes", {})
+    cam_id     = metadata.get("camera_id", "Camera_1")
 
     if not video_path or not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail="Source video not found on disk")
 
     return StreamingResponse(
-        generate_evidence_stream(video_path, boxes, client_id),
+        generate_evidence_stream(video_path, boxes, client_id, cam_id),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "base_time": "08:00:00"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

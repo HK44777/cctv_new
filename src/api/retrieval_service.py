@@ -321,14 +321,26 @@ class RetrievalService:
             return []
 
         # ── Normalize metadata ──────────────────────────────────────────────────
+        def _to_clock(sec: float) -> str:
+            total_sec = 8 * 3600 + max(0.0, float(sec or 0.0))
+            h = int((total_sec // 3600) % 24)
+            m = int((total_sec % 3600) // 60)
+            s = int(total_sec % 60)
+            return f"{h:02d}:{m:02d}:{s:02d}"
+
         for r in fused_results:
             r["metadata"]["breakdown"] = r["breakdown"]
             cam_id = r["metadata"].get("camera_id", "Unknown")
             r["metadata"]["location"] = self.CAMERA_LOCATIONS.get(cam_id, "Unknown Location")
-            if "timestamp" not in r["metadata"]:
+            
+            # Default to 0.0 if timestamp is missing or None
+            if "timestamp" not in r["metadata"] or r["metadata"].get("timestamp") is None:
                 r["metadata"]["timestamp"] = 0.0
-            if "end_time" not in r["metadata"]:
+            if "end_time" not in r["metadata"] or r["metadata"].get("end_time") is None:
                 r["metadata"]["end_time"] = r["metadata"]["timestamp"]
+                
+            r["metadata"]["start_time_str"] = _to_clock(r["metadata"]["timestamp"])
+            r["metadata"]["end_time_str"] = _to_clock(r["metadata"]["end_time"])
 
         # ── Resolve Overlaps Globally (Across All Cameras) ──────────────────────
 

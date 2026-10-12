@@ -69,12 +69,25 @@ for cam in sorted(camera_groups.keys()):
         start = record.payload.get("timestamp", "N/A")
         end   = record.payload.get("end_time", "N/A")
         
+        def to_clock(val):
+            if val == "N/A" or val is None:
+                return "N/A"
+            total = 8 * 3600 + max(0.0, float(val))
+            h = int((total // 3600) % 24)
+            m = int((total % 3600) // 60)
+            s = int(total % 60)
+            return f"{h:02d}:{m:02d}:{s:02d}"
+
         try:
             dur = end - start
             flag = " ⚠️ ZERO/BAD DURATION" if dur <= 0 else ""
-            time_info = f"{start:.2f}s to {end:.2f}s (Duration: {dur:.2f}s){flag}"
+            clock_range = f"{to_clock(start)} - {to_clock(end)}"
+            time_info = f"{clock_range} (Offset: {start:.2f}s to {end:.2f}s, Duration: {dur:.2f}s){flag}"
         except Exception:
-            time_info = f"{start} to {end}"
+            if start == "N/A":
+                time_info = "N/A (Evaluation / Gallery Item - No Video Timestamp)"
+            else:
+                time_info = f"{start} to {end}"
 
         print(f"\n  🆔 UUID: {record.id}")
         print(f"    🕒 Time: {time_info}")

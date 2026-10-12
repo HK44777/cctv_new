@@ -173,11 +173,19 @@ function App() {
   };
 
   const formatDateTime = (startSeconds, endSeconds) => {
-    const today = new Date();
-    today.setHours(8, 0, 0, 0);
+    const s = Math.max(0, Number(startSeconds) || 0);
+    const e = Math.max(s, Number(endSeconds) || s);
 
-    const startTime = new Date(today.getTime() + startSeconds * 1000);
-    const endTime = new Date(today.getTime() + endSeconds * 1000);
+    const today = new Date();
+    // If timestamp is already seconds from midnight (>= 28800 = 8h), start from 00:00:00
+    if (s >= 28800) {
+      today.setHours(0, 0, 0, 0);
+    } else {
+      today.setHours(8, 0, 0, 0);
+    }
+
+    const startTime = new Date(today.getTime() + s * 1000);
+    const endTime = new Date(today.getTime() + e * 1000);
 
     const dateStr = startTime.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
     const startTimeStr = startTime.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
