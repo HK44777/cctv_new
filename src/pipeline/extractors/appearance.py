@@ -103,3 +103,34 @@ class AppearanceExtractor:
         
         return features.cpu().numpy().tolist()
 
+    def extract_with_parts(self, person_crop):
+        """
+        Extracts both global 512-d embedding and 3-part horizontal stripes (B, 512, 3)
+        Part 0 = Head / Upper Torso
+        Part 1 = Mid Torso / Waist
+        Part 2 = Lower Legs / Feet
+        """
+        if person_crop is None or person_crop.size == 0:
+            return None, None
+            
+        img = cv2.resize(person_crop, (128, 256))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = img.astype(np.float32) / 255.0
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        img  = (img - mean) / std
+        img_tensor = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            fmap = self.model.featuremaps(img_tensor)  # (1, 512, 16, 8)
+            # Global pooled
+            global_feat = torch.nn.functional.adaptive_avg_pool2d(fmap, (1, 1)).view(1, 512)
+            global_feat = torch.nn.functional.normalize(global_feat, p=2, dim=1)
+            # 3 parts pooled (horizontal stripes)
+            parts = torch.nn.functional.adaptive_avg_pool2d(fmap, (3, 1)).squeeze(3)
+            parts = torch.nn.functional.normalize(parts, p=2, dim=1)
+
+        g_vec = global_feat.squeeze().cpu().numpy().tolist()
+        p_vecs = [parts[0, :, i].cpu().numpy().tolist() for i in range(3)]
+        return g_vec, p_vecs
+

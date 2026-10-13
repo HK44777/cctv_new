@@ -1,0 +1,17 @@
+[
+  {
+    "label": "Person_A",
+    "vector": [],
+    "tracks": [
+      { "cam_id": "Camera_1", "track_id": "Camera_1_5" },
+      { "cam_id": "Camera_3", "track_id": "Camera_3_2" }
+    ]
+  },
+  {
+    "label": "Person_B",
+    "vector": [],
+    "tracks": [
+      { "cam_id": "Camera_2", "track_id": "Camera_2_1" }
+    ]
+  }
+]

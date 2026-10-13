@@ -50,6 +50,7 @@ class TrackManager:
             if video_path:
                 meta["source_video_path"] = video_path
             meta["bounding_boxes"] = {}
+            meta["track_id"] = track_id          # ← store track_id in Qdrant payload
             t_start = metadata.get("timestamp", 0.0)
             meta["start_time_str"] = self.format_cctv_time(t_start)
             meta["end_time_str"] = self.format_cctv_time(t_start)
@@ -59,7 +60,7 @@ class TrackManager:
                 "faces": {"mean": None, "count": 0},
                 "skeletons": [],   # Max 30
                 "gaits": {"mean": None, "count": 0},
-                "metadata": meta # start_time, camera_id
+                "metadata": meta # start_time, camera_id, track_id
             }
             
         track = self.active_tracks[track_id]
@@ -126,6 +127,16 @@ class TrackManager:
             gait_vector = gait_extractor.extract_gait_vector(track["skeletons"])
             self._update_running_average(track["gaits"], gait_vector)
         
+        # Ghost Track Filter: discard momentary detections (< 1.5s and < 9 frames)
+        t_start = track["metadata"].get("timestamp", 0.0)
+        t_end   = track["metadata"].get("end_time", 0.0)
+        duration = (t_end - t_start) if (t_end is not None and t_start is not None) else 0.0
+        num_bboxes = len(track["metadata"].get("bounding_boxes", {}))
+
+        if duration < 1.5 and num_bboxes < 9:
+            del self.active_tracks[track_id]
+            return
+
         # Extract the running averages and L2 normalize
         final_appearance = self._l2_norm_array(track["appearances"]["mean"]) if track["appearances"]["count"] > 0 else None
         final_face = self._l2_norm_array(track["faces"]["mean"]) if track["faces"]["count"] > 0 else None

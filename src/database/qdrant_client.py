@@ -2,9 +2,13 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
 class DatabaseClient:
+    _shared_client = None
+
     def __init__(self, collection_name="persons", gait_dim=256, app_dim=512, face_dim=512):
-        # Connect to local folder database (no Docker needed)
-        self.client = QdrantClient(path="qdrant_db")
+        # Connect to local folder database (reuse existing connection if already opened in this process)
+        if DatabaseClient._shared_client is None:
+            DatabaseClient._shared_client = QdrantClient(path="qdrant_db")
+        self.client = DatabaseClient._shared_client
         self.collection_name = collection_name
         self.gait_dim = gait_dim
         self.app_dim = app_dim
@@ -28,12 +32,53 @@ class DatabaseClient:
                 }
             )
 
+    def clear_collection(self):
+        """Wipes the collection so it can be cleanly re-ingested with fresh multi-modal vectors."""
+        try:
+            self.client.delete_collection(self.collection_name)
+        except Exception:
+            pass
+        self._ensure_collection()
+        print(f"Collection '{self.collection_name}' cleared and re-initialized.")
+
     def get_by_id(self, uuid: str):
         """Fetch a specific point by its UUID (used for retrieving metadata for Evidence Playback)"""
         res = self.client.retrieve(collection_name=self.collection_name, ids=[uuid], with_vectors=True)
         if res:
             return res[0]
         return None
+
+    def get_by_camera_and_track(self, cam_id: str, track_id: str) -> list:
+        """
+        Finds all Qdrant points that match a specific camera_id AND track_id
+        using a payload filter — no vector search is performed.
+
+        This is used by DemoService to look up pre-verified track segments
+        directly from the resources.json manifest entries.
+
+        Args:
+            cam_id:   e.g. "Camera_1"
+            track_id: e.g. "Camera_1_5"
+
+        Returns:
+            List of matching Qdrant ScoredPoint / Record objects (with payload).
+        """
+        from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+
+        results, _ = self.client.scroll(
+            collection_name=self.collection_name,
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(key="camera_id", match=MatchValue(value=cam_id)),
+                    FieldCondition(key="track_id",  match=MatchValue(value=track_id)),
+                ]
+            ),
+            with_payload=True,
+            with_vectors=False,
+            limit=10,   # One person should have at most a handful of segments per camera
+        )
+        return results
+
 
     def _align_vector(self, vec, expected_dim):
         """Safely aligns vector length to expected dimension to prevent Qdrant errors."""

@@ -5,10 +5,10 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 class MultiObjectTracker:
     def __init__(self):
         # Step 3: Multi-Object Tracking (DeepSORT)
-        # Using a maximum age of 30 frames before a track is considered "closed" (Step 8)
+        # Using a maximum age of 60 frames (2.0s) to bridge occlusions and prevent track fragmentation
         # Enforce GPU for the internal MobileNetV2 embedder
-        self.tracker = DeepSort(max_age=30, n_init=3, embedder_gpu=True)
-        print("[Tracker] ✅ Initialized Multi-Object Tracker (DeepSORT) on GPU")
+        self.tracker = DeepSort(max_age=60, n_init=3, embedder_gpu=True)
+        print("[Tracker] ✅ Initialized Multi-Object Tracker (DeepSORT) on GPU (max_age=60)")
 
     def update(self, frame: np.ndarray, boxes: List[List[float]], confidences: List[float]) -> List[Dict[str, Any]]:
         """

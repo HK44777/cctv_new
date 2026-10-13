@@ -25,9 +25,9 @@ from opengait.modeling.modules import (  # type: ignore[import]
 MAP_H, MAP_W = 64, 44    # SkeletonGait canonical input size
 NORM_H       = 128        # Normalization canvas (CenterAndScaleNormalizer)
 SIGMA        = 8.0        # Gaussian kernel sigma
-MIN_CROP_H   = 80         # Skip pose estimation if person crop is too small
-MIN_JOINTS   = 8          # Skip frame if fewer than this many joints are confident
-JOINT_CONF   = 0.3        # Joint confidence threshold
+MIN_CROP_H   = 45         # Lowered from 80 so distance CCTV crops on 640x480 frames produce skeletons
+MIN_JOINTS   = 6          # Lowered from 8 to allow partial viewpoints (seated, angled)
+JOINT_CONF   = 0.25       # Minimum joint confidence threshold
 
 # COCO-17 limb connections (matches OpenGait's default skeleton definition)
 COCO_SKELETON = (

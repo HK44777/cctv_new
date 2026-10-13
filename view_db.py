@@ -54,7 +54,7 @@ for cam in sorted(camera_groups.keys()):
         durations.append(end - start)
 
     avg_dur = sum(durations) / len(durations) if durations else 0
-    print(f"\n  🎥 {cam}:")
+    print(f"\n  [CAM] {cam}:")
     print(f"    Records (persons tracked): {len(recs)}")
     print(f"    Avg track duration:        {avg_dur:.1f}s")
     print(f"    Min/Max duration:          {min(durations):.1f}s / {max(durations):.1f}s")
@@ -80,7 +80,7 @@ for cam in sorted(camera_groups.keys()):
 
         try:
             dur = end - start
-            flag = " ⚠️ ZERO/BAD DURATION" if dur <= 0 else ""
+            flag = " [ZERO/BAD DURATION]" if dur <= 0 else ""
             clock_range = f"{to_clock(start)} - {to_clock(end)}"
             time_info = f"{clock_range} (Offset: {start:.2f}s to {end:.2f}s, Duration: {dur:.2f}s){flag}"
         except Exception:
@@ -89,11 +89,11 @@ for cam in sorted(camera_groups.keys()):
             else:
                 time_info = f"{start} to {end}"
 
-        print(f"\n  🆔 UUID: {record.id}")
-        print(f"    🕒 Time: {time_info}")
+        print(f"\n  UUID: {record.id}")
+        print(f"    Time: {time_info}")
         
         # Display all metadata except timestamp/end_time/camera_id which are already shown
-        print(f"    📝 Additional Metadata:")
+        print(f"    Additional Metadata:")
         for key, value in record.payload.items():
             if key not in ["timestamp", "end_time", "camera_id"]:
                 print(f"       - {key}: {value}")
@@ -102,12 +102,13 @@ for cam in sorted(camera_groups.keys()):
         # In Qdrant named vectors, record.vector will be a dictionary
         vectors = record.vector if record.vector else {}
         
-        app_status  = "✅ Vector Present" if "appearance" in vectors else "❌ None"
-        face_status = "✅ Vector Present" if "face" in vectors else "❌ None"
-        gait_status = "✅ Vector Present" if "gait" in vectors else "❌ None"
+        app_status  = "YES (512-dim)" if "appearance" in vectors and vectors["appearance"] else "NONE"
+        face_status = "YES (512-dim)" if "face" in vectors and vectors["face"] else "NONE"
+        gait_status = "YES (256-dim)" if "gait" in vectors and vectors["gait"] else "NONE"
         
-        print(f"    🧠 Vector Status:")
+        print(f"    Vector Status:")
         print(f"       - Appearance : {app_status}")
         print(f"       - Face       : {face_status}")
         print(f"       - Gait       : {gait_status}")
 print("\n")
+

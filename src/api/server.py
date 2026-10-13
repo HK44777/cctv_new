@@ -6,7 +6,7 @@ import cv2
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from typing import Optional
 import uvicorn
 
@@ -15,6 +15,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from src.api.schemas import ImageUploadResponse, VideoUploadResponse, TargetExtractionRequest, TargetExtractionResponse
 from src.api.retrieval_service import RetrievalService
+from src.api.demo_service import DemoService
+from src.api.vector_tool_service import VectorToolService
 
 app = FastAPI(title="Retrieval API")
 
@@ -26,7 +28,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-service = RetrievalService()
+service        = RetrievalService()
+demo_service   = DemoService(db=service.db, detector=service.detector, app_ext=service.app_ext)
+vector_service = VectorToolService(detector=service.detector, extractor=service.app_ext)
+
+VECTOR_TOOL_HTML = os.path.join(os.path.dirname(__file__), "static", "vector_tool.html")
 
 TEMP_DIR = "data/temp_uploads"
 os.makedirs(TEMP_DIR, exist_ok=True)
@@ -99,7 +105,92 @@ async def extract_target(request: TargetExtractionRequest):
     )
 
 
-# Global dictionary to track where a client paused
+# ── Demo Endpoints (controlled manifest-based matching) ────────────────────────
+
+@app.post("/demo/upload/image")
+async def demo_upload_image(file: UploadFile = File(...)):
+    """
+    Demo image query flow:
+      YOLO crop → OSNet vector → manifest cosine match → Qdrant lookup → timeline.
+    All matching logic is handled by DemoService using resources.json.
+    """
+    contents = await file.read()
+    loop     = asyncio.get_running_loop()
+    result   = await loop.run_in_executor(None, demo_service.handle_image_query, contents)
+    return result
+
+
+@app.post("/demo/extract/target")
+async def demo_extract_target(request: TargetExtractionRequest):
+    """
+    Demo video-clip query flow (second step after /upload/video):
+      Read cached crops for selected track → best-frame OSNet vector
+      → manifest cosine match → Qdrant lookup → timeline.
+    """
+    video_path = os.path.join(TEMP_DIR, f"{request.session_id}.mp4")
+    if not os.path.exists(video_path):
+        return {"status": "error", "message": "Session expired or video not found.", "timeline": []}
+
+    # Read the crops for the selected track from the tracking cache
+    session_cache = service._tracking_cache.get(request.session_id, {})
+    track_history = session_cache.get(request.track_id, [])
+
+    if not track_history:
+        return {"status": "error", "message": f"No tracking data for track '{request.track_id}'.", "timeline": []}
+
+    # Extract the actual crops from the video file for the tracked frames
+    def _read_crops():
+        crops = []
+        cap   = cv2.VideoCapture(video_path)
+        for frame_idx, bbox in track_history:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            x1, y1, x2, y2 = bbox
+            crop = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
+            if crop.size > 0:
+                crops.append(crop)
+        cap.release()
+        return crops
+
+    loop   = asyncio.get_running_loop()
+    crops  = await loop.run_in_executor(None, _read_crops)
+    result = await loop.run_in_executor(None, demo_service.handle_video_clip_query, crops)
+    return result
+
+
+# ── Vector Extractor Studio & Manifest Tool Endpoints ──────────────────────────
+
+@app.get("/vector-tool", response_class=HTMLResponse)
+@app.get("/vector-extractor", response_class=HTMLResponse)
+async def get_vector_tool_ui():
+    """Serves the OSNet Vector Studio & Manifest Builder web application."""
+    if os.path.exists(VECTOR_TOOL_HTML):
+        with open(VECTOR_TOOL_HTML, "r", encoding="utf-8") as f:
+            return f.read()
+    return HTMLResponse("<h3>Vector Tool UI file not found on server disk.</h3>", status_code=404)
+
+
+@app.post("/tools/extract-vector")
+async def extract_vector(file: UploadFile = File(...), auto_crop: bool = True):
+    """
+    Extracts 512-dim L2-normalized OSNet vector, crop preview, and detection stats
+    from an uploaded image for building resources.json.
+    """
+    contents = await file.read()
+    loop     = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, vector_service.extract_from_image, contents, auto_crop
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+
+# ── Global dictionary to track where a client paused ───────────────────────────
 CLIENT_SESSIONS = {}
 
 async def generate_evidence_stream(video_path: str, boxes: dict, client_id: str = None, cam_id: str = "Camera_1"):
@@ -218,6 +309,7 @@ async def stream_evidence(uuid: str, client_id: Optional[str] = None):
 @app.get("/health")
 async def health():
     return {"status": "ok", "base_time": "08:00:00"}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

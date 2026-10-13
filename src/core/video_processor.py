@@ -1,4 +1,4 @@
-﻿import cv2
+import cv2
 import time
 from src.pipeline.enhancer import ZeroDCEEnhancer
 from src.pipeline.detector import PersonDetector
@@ -123,14 +123,37 @@ class VideoProcessor:
         else:
             skeleton_maps = []
 
-        # Step 8: Register & process gait buffer per track
+        # Step 8: Occlusion Gating & Register per track
+        # Prevent ID-switch contamination: If bounding boxes overlap (IoU > 0.25),
+        # do not accumulate appearance or face embeddings into the track's running average.
+        def _calc_iou(b1, b2):
+            ix1, iy1 = max(b1[0], b2[0]), max(b1[1], b2[1])
+            ix2, iy2 = min(b1[2], b2[2]), min(b1[3], b2[3])
+            iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+            inter = iw * ih
+            a1 = max(0, b1[2] - b1[0]) * max(0, b1[3] - b1[1])
+            a2 = max(0, b2[2] - b2[0]) * max(0, b2[3] - b2[1])
+            union = a1 + a2 - inter
+            return (inter / union) if union > 0 else 0.0
+
+        is_occluded = [False] * len(bboxes)
+        for i in range(len(bboxes)):
+            for j in range(len(bboxes)):
+                if i != j and _calc_iou(bboxes[i], bboxes[j]) > 0.25:
+                    is_occluded[i] = True
+                    break
+
         t0 = time.perf_counter()
         for i, global_tid in enumerate(global_tids):
             skeleton = skeleton_maps[i] if i < len(skeleton_maps) else None
+            # Gate appearance & face when occluded to prevent chimeric embeddings
+            app_to_reg = None if is_occluded[i] else app_vecs[i]
+            face_to_reg = None if is_occluded[i] else face_vecs[i]
+
             self.track_manager.register_frame_data(
                 track_id=global_tid,
-                appearance=app_vecs[i],
-                face=face_vecs[i],
+                appearance=app_to_reg,
+                face=face_to_reg,
                 skeleton=skeleton,
                 metadata=metadatas[i],
                 video_path=video_path,
