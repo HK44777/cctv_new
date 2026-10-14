@@ -702,10 +702,32 @@
         </h2>
         <p class="card-subtitle">Copy the extracted vector as a Base64 string or JSON float array to paste into your files.</p>
 
-        <!-- Person Label helper -->
+        <!-- Reference Metadata Inputs (for resources.json) -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.85rem;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label" for="refIdInput">Reference ID:</label>
+            <input type="text" id="refIdInput" class="form-input" placeholder="e.g. ref_cam1_trk12" value="ref_001" oninput="updateJsonPreview()">
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label" for="videoIdInput">Video ID:</label>
+            <input type="text" id="videoIdInput" class="form-input" placeholder="e.g. cam_1.mp4" value="cam_1.mp4" oninput="updateJsonPreview()">
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.85rem;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label" for="camIdInput">Camera ID:</label>
+            <input type="text" id="camIdInput" class="form-input" placeholder="e.g. Camera_1" value="Camera_1" oninput="updateJsonPreview()">
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label" for="trackIdInput">Track ID:</label>
+            <input type="text" id="trackIdInput" class="form-input" placeholder="e.g. Camera_1_12 or 12" value="Camera_1_12" oninput="updateJsonPreview()">
+          </div>
+        </div>
+
         <div class="form-group">
-          <label class="form-label" for="personLabelInput">Person Label (for JSON template):</label>
-          <input type="text" id="personLabelInput" class="form-input" placeholder="e.g. Person_A, Person_B" value="Person_A" oninput="updateJsonPreview()">
+          <label class="form-label" for="personLabelInput">Identity Label (optional cross-video grouping):</label>
+          <input type="text" id="personLabelInput" class="form-input" placeholder="e.g. Person_A (or leave blank if unconfirmed)" value="Person_A" oninput="updateJsonPreview()">
         </div>
 
         <!-- Action Buttons -->
@@ -866,19 +888,28 @@
       }
     }
 
+    function getReferenceObject() {
+      if (!activeVector) return null;
+      const refId = document.getElementById('refIdInput').value.trim() || 'ref_001';
+      const videoId = document.getElementById('videoIdInput').value.trim() || 'cam_1.mp4';
+      const camId = document.getElementById('camIdInput').value.trim() || 'Camera_1';
+      const trackId = document.getElementById('trackIdInput').value.trim() || 'Camera_1_1';
+      const identityLabel = document.getElementById('personLabelInput').value.trim();
+
+      return {
+        reference_id: refId,
+        video_id: videoId,
+        camera_id: camId,
+        track_id: trackId,
+        identity_label: identityLabel ? identityLabel : null,
+        embedding: activeVector
+      };
+    }
+
     function updateJsonPreview() {
       const codeBox = document.getElementById('jsonPreviewBox');
-      if (!activeVector) return;
-
-      const label = document.getElementById('personLabelInput').value.trim() || "Target_Person";
-      const sampleEntry = {
-        label: label,
-        vector: activeVector,
-        tracks: [
-          { cam_id: "Camera_1", track_id: "Camera_1_1" }
-        ]
-      };
-
+      const sampleEntry = getReferenceObject();
+      if (!sampleEntry) return;
       codeBox.innerText = JSON.stringify(sampleEntry, null, 2);
     }
 
@@ -894,16 +925,10 @@
     }
 
     async function copyFullEntry() {
-      if (!activeVector) return;
-      const label = document.getElementById('personLabelInput').value.trim() || "Target_Person";
-      const sampleEntry = {
-        label: label,
-        vector: activeVector,
-        tracks: [
-          { cam_id: "Camera_1", track_id: "Camera_1_1" }
-        ]
-      };
-      await copyTextToClipboard(JSON.stringify(sampleEntry, null, 2), `Copied JSON entry for '${label}'!`);
+      const sampleEntry = getReferenceObject();
+      if (!sampleEntry) return;
+      const refId = sampleEntry.reference_id;
+      await copyTextToClipboard(JSON.stringify(sampleEntry, null, 2), `Copied JSON reference entry '${refId}'!`);
     }
 
     async function copyTextToClipboard(text, successMsg) {

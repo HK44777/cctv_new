@@ -1,0 +1,31 @@
+# Tuned ByteTrack Configuration for Fixed Indoor CCTV Person Tracking
+# Optimized for 15 FPS cadence on campus footage (NVIDIA GPU)
+
+tracker_type: bytetrack  # Backend tracker
+
+# Detection Association Thresholds:
+# High-confidence threshold for first-stage matching (YOLO detection boxes with conf >= 0.45)
+track_high_thresh: 0.45
+
+# Low-confidence threshold for second-stage recovery of occluded or partially visible persons
+track_low_thresh: 0.15
+
+# Track Initialization:
+# Minimum detection confidence to initialize a brand-new track.
+# Set to 0.50 to eliminate false-positive object tracks (e.g. backpacks, jackets on benches)
+# while reliably initializing real persons.
+new_track_thresh: 0.50
+
+# Track Retention / Memory:
+# Frames to keep lost tracks alive in Kalman filter memory.
+# 45 frames at 15 FPS = 3.0 seconds of occlusion memory.
+# Bridges temporary occlusions behind pillars or passing students without spawning new IDs.
+track_buffer: 45
+
+# Association Metric:
+# IoU distance threshold for Hungarian association matching.
+match_thresh: 0.75
+
+# Score Fusion:
+# Fuses detection score with spatial motion/IoU for association stability.
+fuse_score: True

@@ -10,17 +10,18 @@ from src.core.track_manager import TrackManager
 from src.database.qdrant_client import DatabaseClient
 
 class VideoProcessor:
-    def __init__(self):
-        print("Initializing Pipeline...")
+    def __init__(self, target_fps: int = 15):
+        print(f"Initializing Pipeline (Target FPS: {target_fps})...")
         # strict_gpu=True -> enforces that the ingestion pipeline MUST run these on the GPU.
         self.enhancer = ZeroDCEEnhancer(strict_gpu=True)
         self.detector = PersonDetector(strict_gpu=True)
+        self.target_fps = target_fps
         
         # We need a dictionary to hold a separate tracker instance for each camera
         self.trackers = {}
 
         # Per-camera counter of received (processed) frames - used to subsample heavy extractors
-        # Since queue sends at 6 FPS, every 6th received frame = 1 FPS for face & appearance
+        # At target_fps, every target_fps received frame = 1 FPS for face & appearance
         self.cam_frame_counts = {}
         
         self.app_ext  = AppearanceExtractor(strict_gpu=True)
@@ -59,7 +60,7 @@ class VideoProcessor:
 
         # Increment per-camera received-frame counter ONCE per frame (outside the per-person loop)
         self.cam_frame_counts[camera_id] = self.cam_frame_counts.get(camera_id, 0) + 1
-        extract_heavy = (self.cam_frame_counts[camera_id] % 6 == 0)  # True at 1 FPS
+        extract_heavy = (self.cam_frame_counts[camera_id] % self.target_fps == 0)  # True at 1 FPS
 
         # Step 4: Batch-crop all active persons
         # Collect per-track info and crops first, then run GPU inference in one batch call.
@@ -191,4 +192,6 @@ class VideoProcessor:
         # Pass gait_ext so final skeleton buffers (15-29 frames) produce embeddings instead of being discarded
         self.track_manager.close_all_tracks(gait_extractor=self.gait_ext)
         self.cam_frame_counts.clear()
+        if hasattr(self.db, "close"):
+            self.db.close()
         print("Finalized all remaining tracks.")

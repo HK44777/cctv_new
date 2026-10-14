@@ -32,12 +32,13 @@ class PersonDetector:
             print(f"[PersonDetector] ❌ Failed to load YOLO model: {e}", file=sys.stderr)
             raise
 
-    def detect(self, frame: np.ndarray) -> Tuple[List[List[float]], List[float]]:
+    def detect(self, frame: np.ndarray, conf_thresh: float = 0.35) -> Tuple[List[List[float]], List[float]]:
         """
         Detects people in a given frame.
 
         Args:
             frame: Enhanced BGR frame (numpy array).
+            conf_thresh: Confidence threshold for person detections (default 0.35).
             
         Returns:
             Tuple containing:
@@ -45,7 +46,7 @@ class PersonDetector:
             - List of confidences (floats) for the 'person' class.
         """
         # Run inference. classes=[0] ensures we only detect 'person'
-        results = self.model(frame, classes=[0], device=self.yolo_device, verbose=False)
+        results = self.model(frame, classes=[0], conf=conf_thresh, device=self.yolo_device, verbose=False)
 
         boxes = []
         confidences = []

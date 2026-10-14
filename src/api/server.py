@@ -29,7 +29,7 @@ app.add_middleware(
 )
 
 service        = RetrievalService()
-demo_service   = DemoService(db=service.db, detector=service.detector, app_ext=service.app_ext)
+demo_service   = DemoService(db=service.db, detector=service.detector, app_ext=service.app_ext, enhancer=service.enhancer)
 vector_service = VectorToolService(detector=service.detector, extractor=service.app_ext)
 
 VECTOR_TOOL_HTML = os.path.join(os.path.dirname(__file__), "static", "vector_tool.html")
@@ -188,6 +188,180 @@ async def extract_vector(file: UploadFile = File(...), auto_crop: bool = True):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+
+# ── Ingested Video Lineup Endpoints (Phase 2 Workflow) ─────────────────────────
+
+NEW_VIDEOS_DIR = "data/new_videos"
+LINEUP_CACHE = {}
+
+@app.get("/api/videos/ingested")
+async def get_ingested_videos():
+    """Returns the list of ingested CCTV videos available for lineup selection."""
+    os.makedirs(NEW_VIDEOS_DIR, exist_ok=True)
+    cams = [
+        ("cam_1.mp4", "Camera_1", "Camera 1 (Entry Left)"),
+        ("cam_2.mp4", "Camera_2", "Camera 2 (Entry Front)"),
+        ("cam_3.mp4", "Camera_3", "Camera 3 (Entry Back)"),
+        ("cam_4.mp4", "Camera_4", "Camera 4 (Hallway Corridor)"),
+    ]
+    available = []
+    for fn, cam_id, label in cams:
+        fpath = os.path.join(NEW_VIDEOS_DIR, fn)
+        if os.path.exists(fpath):
+            available.append({
+                "filename": fn,
+                "camera_id": cam_id,
+                "label": label,
+                "path": fpath
+            })
+    return {"videos": available}
+
+
+@app.get("/api/videos/{camera_id}/lineup")
+async def get_video_lineup(camera_id: str):
+    """
+    Retrieves the DeepSORT track lineup and person crops for an ingested video.
+    Avoids unnecessary reprocessing by reading existing Qdrant track records and extracting
+    representative crops directly from the video file.
+    """
+    if camera_id in LINEUP_CACHE:
+        return LINEUP_CACHE[camera_id]
+
+    cam_to_video = {
+        "Camera_1": "cam_1.mp4",
+        "Camera_2": "cam_2.mp4",
+        "Camera_3": "cam_3.mp4",
+        "Camera_4": "cam_4.mp4",
+    }
+    video_file = cam_to_video.get(camera_id)
+    if not video_file:
+        raise HTTPException(status_code=404, detail=f"Unknown camera: {camera_id}")
+
+    video_path = os.path.join(NEW_VIDEOS_DIR, video_file)
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail=f"Video file {video_file} not found on disk.")
+
+    def _extract_lineup():
+        from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+        points, _ = service.db.client.scroll(
+            collection_name=service.db.collection_name,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="camera_id", match=MatchValue(value=camera_id))]
+            ),
+            limit=250,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        # Step 1: Collect candidates (top clearest tracks by duration)
+        sorted_points = sorted(
+            points,
+            key=lambda p: float((p.payload or {}).get("end_time", 0.0) or 0.0) - float((p.payload or {}).get("timestamp", 0.0) or 0.0),
+            reverse=True
+        )
+        candidates = []
+        session_id = f"ingested_{camera_id}"
+        service._tracking_cache[session_id] = {}
+
+        for p in sorted_points:
+            payload = p.payload or {}
+            bboxes = payload.get("bounding_boxes", {})
+            if not bboxes:
+                continue
+
+            tid_full = payload.get("track_id", str(p.id))
+            local_tid = tid_full.replace(f"{camera_id}_", "") if str(tid_full).startswith(f"{camera_id}_") else str(tid_full)
+
+            track_history = []
+            best_frame_idx = None
+            best_bbox = None
+            max_area = 0
+
+            for f_str, bbox in bboxes.items():
+                if len(bbox) == 4:
+                    f_int = int(f_str)
+                    track_history.append((f_int, bbox))
+                    w = max(0, bbox[2] - bbox[0])
+                    h = max(0, bbox[3] - bbox[1])
+                    if w * h > max_area:
+                        max_area = w * h
+                        best_bbox = bbox
+                        best_frame_idx = f_int
+
+            service._tracking_cache[session_id][str(tid_full)] = track_history
+            service._tracking_cache[session_id][str(local_tid)] = track_history
+
+            if best_frame_idx is not None and best_bbox is not None and max_area >= 500:
+                t_start = float(payload.get("timestamp", 0.0) or 0.0)
+                t_end = float(payload.get("end_time", 0.0) or 0.0)
+                candidates.append({
+                    "track_id": str(tid_full),
+                    "local_track_id": str(local_tid),
+                    "camera_id": camera_id,
+                    "video_id": video_file,
+                    "start_time_str": payload.get("start_time_str", "08:00:00"),
+                    "end_time_str": payload.get("end_time_str", "08:00:00"),
+                    "duration": round(t_end - t_start, 1),
+                    "best_frame_idx": best_frame_idx,
+                    "best_bbox": best_bbox
+                })
+
+            if len(candidates) >= 30:
+                break
+
+        # Step 2: Sort candidates in ascending frame order for smooth, fast monotonic video seeking
+        candidates_by_frame = sorted(candidates, key=lambda c: c["best_frame_idx"])
+        cap = cv2.VideoCapture(video_path)
+        thumbnails = []
+
+        for c in candidates_by_frame:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, c["best_frame_idx"])
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+
+            crop_base64 = RetrievalService._create_person_thumbnail(frame, c["best_bbox"], str(c["local_track_id"]))
+
+            # Also generate a clean, unannotated crop for OSNet Vector Studio and Re-ID queries
+            bbox = c["best_bbox"]
+            h_f, w_f = frame.shape[:2]
+            x1 = max(0, min(w_f - 1, int(round(bbox[0]))))
+            y1 = max(0, min(h_f - 1, int(round(bbox[1]))))
+            x2 = max(x1 + 1, min(w_f, int(round(bbox[2]))))
+            y2 = max(y1 + 1, min(h_f, int(round(bbox[3]))))
+            clean_patch = frame[y1:y2, x1:x2]
+            clean_b64 = crop_base64
+            if clean_patch.size > 0:
+                ret_enc, enc_buf = cv2.imencode('.jpg', clean_patch, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+                if ret_enc:
+                    clean_b64 = base64.b64encode(enc_buf).decode('utf-8')
+
+            c_entry = dict(c)
+            del c_entry["best_frame_idx"]
+            del c_entry["best_bbox"]
+            c_entry["crop"] = crop_base64
+            c_entry["clean_crop"] = clean_b64
+            thumbnails.append(c_entry)
+
+        cap.release()
+
+        # Sort thumbnails back by duration descending for optimal lineup browsing
+        thumbnails.sort(key=lambda t: t.get("duration", 0.0), reverse=True)
+
+        result = {
+            "session_id": session_id,
+            "camera_id": camera_id,
+            "video_file": video_file,
+            "total_tracks": len(thumbnails),
+            "thumbnails": thumbnails
+        }
+        LINEUP_CACHE[camera_id] = result
+        print(f"[Lineup] Successfully extracted {len(thumbnails)} tracks for {camera_id}.")
+        return result
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _extract_lineup)
 
 
 # ── Global dictionary to track where a client paused ───────────────────────────

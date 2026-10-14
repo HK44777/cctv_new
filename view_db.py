@@ -111,4 +111,5 @@ for cam in sorted(camera_groups.keys()):
         print(f"       - Face       : {face_status}")
         print(f"       - Gait       : {gait_status}")
 print("\n")
+client.close()
 

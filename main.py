@@ -23,7 +23,7 @@ def frame_producer(vid_file_path, cam_id, frame_queue):
     if fps <= 0:
         fps = 30 # Default to 30 if unable to read FPS
         
-    target_fps = 6 # Force exactly 6 frames per second to the queue (1 every 6 frames = 1 second)
+    target_fps = 15 # Ingestion at 15 FPS: 66.7ms intervals provide smooth tracker continuity
     frame_interval = max(1, int(round(fps / target_fps)))
     
     frame_count = 0
@@ -69,16 +69,17 @@ def main():
     print("Starting Offline Ingestion Phase (All CCTV Videos start: 08:00:00 AM)")
     print("=" * 65)
     
-    video_dir = "data/videos"
+    video_dir = "data/new_videos"
     if not os.path.exists(video_dir):
         os.makedirs(video_dir)
         print(f"Please place your video files in '{video_dir}' and run again.")
         return
 
     videos = [
-        ("cam1.mp4", "Camera_1"),
-        ("cam2.mp4", "Camera_2"),
-        ("cam3.mp4", "Camera_3")
+        ("cam_1.mp4", "Camera_1"),
+        ("cam_2.mp4", "Camera_2"),
+        ("cam_3.mp4", "Camera_3"),
+        ("cam_4.mp4", "Camera_4")
     ]
     
     processor = VideoProcessor()

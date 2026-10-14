@@ -1,3 +1,4 @@
+from typing import Any, List, Optional, Dict
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -41,6 +42,15 @@ class DatabaseClient:
         self._ensure_collection()
         print(f"Collection '{self.collection_name}' cleared and re-initialized.")
 
+    def close(self):
+        """Explicitly closes the local Qdrant database to prevent shutdown warnings."""
+        if DatabaseClient._shared_client is not None:
+            try:
+                DatabaseClient._shared_client.close()
+            except Exception:
+                pass
+            DatabaseClient._shared_client = None
+
     def get_by_id(self, uuid: str):
         """Fetch a specific point by its UUID (used for retrieving metadata for Evidence Playback)"""
         res = self.client.retrieve(collection_name=self.collection_name, ids=[uuid], with_vectors=True)
@@ -48,36 +58,70 @@ class DatabaseClient:
             return res[0]
         return None
 
-    def get_by_camera_and_track(self, cam_id: str, track_id: str) -> list:
+    def get_by_camera_and_track(self, cam_id: str, track_id: Any) -> list:
         """
         Finds all Qdrant points that match a specific camera_id AND track_id
         using a payload filter — no vector search is performed.
 
-        This is used by DemoService to look up pre-verified track segments
-        directly from the resources.json manifest entries.
-
-        Args:
-            cam_id:   e.g. "Camera_1"
-            track_id: e.g. "Camera_1_5"
-
-        Returns:
-            List of matching Qdrant ScoredPoint / Record objects (with payload).
+        Supports both prefixed (e.g. 'Camera_1_5') and unprefixed (e.g. '5' or 5)
+        track IDs seamlessly.
         """
-        from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+        from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
 
-        results, _ = self.client.scroll(
-            collection_name=self.collection_name,
-            scroll_filter=Filter(
-                must=[
-                    FieldCondition(key="camera_id", match=MatchValue(value=cam_id)),
-                    FieldCondition(key="track_id",  match=MatchValue(value=track_id)),
-                ]
-            ),
-            with_payload=True,
-            with_vectors=False,
-            limit=10,   # One person should have at most a handful of segments per camera
-        )
-        return results
+        tid_str = str(track_id).strip()
+        candidates = [tid_str]
+
+        # Generate alternate formats
+        if not tid_str.startswith(f"{cam_id}_"):
+            candidates.append(f"{cam_id}_{tid_str}")
+        else:
+            candidates.append(tid_str[len(cam_id) + 1:])
+
+        try:
+            candidates.append(int(tid_str.split("_")[-1]))
+        except ValueError:
+            pass
+
+        # Try MatchAny first
+        try:
+            results, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(key="camera_id", match=MatchValue(value=cam_id)),
+                        FieldCondition(key="track_id",  match=MatchAny(any=candidates)),
+                    ]
+                ),
+                with_payload=True,
+                with_vectors=False,
+                limit=15,
+            )
+            if results:
+                return results
+        except Exception:
+            pass
+
+        # Fallback: sequential MatchValue tests
+        for cand in candidates:
+            try:
+                results, _ = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(key="camera_id", match=MatchValue(value=cam_id)),
+                            FieldCondition(key="track_id",  match=MatchValue(value=cand)),
+                        ]
+                    ),
+                    with_payload=True,
+                    with_vectors=False,
+                    limit=15,
+                )
+                if results:
+                    return results
+            except Exception:
+                continue
+
+        return []
 
 
     def _align_vector(self, vec, expected_dim):

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UploadCloud, Image as ImageIcon, Video, ArrowLeft, Loader2, CheckCircle2, ChevronRight, Play, Pause, RotateCcw, Crosshair, Fingerprint, Activity, Clock } from 'lucide-react';
+import { UploadCloud, Image as ImageIcon, Video, ArrowLeft, Loader2, CheckCircle2, ChevronRight, Play, Pause, RotateCcw, Crosshair, Fingerprint, Activity, Clock, ExternalLink, Copy, Check } from 'lucide-react';
 
 const API_BASE = "http://localhost:8000";
 
@@ -17,6 +17,26 @@ function App() {
   const [playingEvidence, setPlayingEvidence] = useState(null);
   const [evidenceKey, setEvidenceKey] = useState(Date.now());
   const [isEvidencePaused, setIsEvidencePaused] = useState(false);
+
+  // Phase 2 Curation & Demo State
+  const [ingestedVideos, setIngestedVideos] = useState([]);
+  const [selectedCamera, setSelectedCamera] = useState('Camera_1');
+  const [matchedLabel, setMatchedLabel] = useState('');
+  const [copiedTrack, setCopiedTrack] = useState(null);
+  const [noMatchNotice, setNoMatchNotice] = useState(null);
+
+  // Fetch available ingested CCTV videos on mount
+  useEffect(() => {
+    fetch(`${API_BASE}/api/videos/ingested`)
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.videos && data.videos.length > 0) {
+          setIngestedVideos(data.videos);
+          setSelectedCamera(data.videos[0].camera_id);
+        }
+      })
+      .catch(err => console.error("Could not fetch ingested videos list:", err));
+  }, []);
 
   // Dynamic Stepper Logic
   const steps = isImageQuery 
@@ -49,40 +69,80 @@ function App() {
     }
   };
 
+  // Phase 5: Demo Search by Image (matches resources.json & retrieves from Qdrant)
   const handleImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     setView('loading');
-    setLoadingText('Extracting multi-modal features...');
+    setLoadingText('Querying curated OSNet references & Qdrant evidence...');
     setIsImageQuery(true);
+    setNoMatchNotice(null);
 
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-      const res = await fetch(`${API_BASE}/upload/image`, {
+      const res = await fetch(`${API_BASE}/demo/upload/image`, {
         method: 'POST',
         body: formData,
       });
       const data = await res.json();
-      setExtractedFeatures(data.extracted_features);
-      setMatches(data.matches);
+
+      if (data.status === 'no_match') {
+        setNoMatchNotice(data.message || 'No person matched with sufficient confidence (threshold: 0.55).');
+        setView('upload');
+        return;
+      }
+
+      if (data.status === 'error') {
+        alert(data.message || 'Feature extraction error.');
+        setView('upload');
+        return;
+      }
+
+      setExtractedFeatures(data.extracted_features || ['appearance']);
+      setMatches(data.matches || []);
+      setMatchedLabel(data.label || 'Target Person');
       setView('results');
     } catch (err) {
       console.error(err);
-      alert("Failed to process image.");
+      alert("Failed to process image query.");
       setView('upload');
     }
   };
 
+  // Phase 2: Ingested Video Lineup Selector
+  const handleLoadIngestedLineup = async (camId) => {
+    const targetCam = camId || selectedCamera;
+    setView('loading');
+    setLoadingText(`Retrieving DeepSORT tracks for ${targetCam}...`);
+    setIsImageQuery(false);
+    setNoMatchNotice(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/videos/${targetCam}/lineup`);
+      const data = await res.json();
+      setSessionId(data.session_id);
+      setThumbnails(data.thumbnails || []);
+      setSelectedCamera(targetCam);
+      setView('lineup');
+    } catch (err) {
+      console.error(err);
+      alert("Failed to load video lineup.");
+      setView('upload');
+    }
+  };
+
+  // Video File Upload (Ad-hoc video tracker)
   const handleVideoUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     setView('loading');
-    setLoadingText('Tracking subjects in video feed...');
+    setLoadingText('Tracking subjects with DeepSORT in video feed...');
     setIsImageQuery(false);
+    setNoMatchNotice(null);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -125,6 +185,12 @@ function App() {
       alert("Failed to extract target.");
       setView('lineup');
     }
+  };
+
+  const copyToClipboard = (text, id) => {
+    navigator.clipboard.writeText(text);
+    setCopiedTrack(id);
+    setTimeout(() => setCopiedTrack(null), 2000);
   };
 
   const handlePlayEvidence = (targetId) => {
@@ -290,55 +356,185 @@ function App() {
           )}
 
           {view === 'upload' && (
-            <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto w-full relative z-10 my-auto">
-              {/* Image Upload */}
-              <label className="relative flex flex-col items-center justify-center p-10 md:p-16 bg-slate-800 border border-slate-600 rounded-2xl cursor-pointer hover:border-cyan-400 hover:bg-slate-700 transition-all duration-300 group">
-                <div className="bg-slate-900 p-6 rounded-full border border-slate-600 shadow-xl mb-6 group-hover:scale-110 transition-all duration-300">
-                  <ImageIcon className="w-12 h-12 text-cyan-400" />
+            <div className="flex flex-col max-w-5xl mx-auto w-full relative z-10 my-auto gap-8">
+              {noMatchNotice && (
+                <div className="p-4 bg-amber-950/40 border border-amber-500/40 rounded-xl text-amber-300 text-base flex items-center justify-between">
+                  <span className="flex items-center gap-3">
+                    <Activity size={20} className="text-amber-400" />
+                    {noMatchNotice}
+                  </span>
+                  <button onClick={() => setNoMatchNotice(null)} className="text-amber-400 hover:text-white text-sm font-semibold ml-4">
+                    Dismiss
+                  </button>
                 </div>
-                <h3 className="text-3xl font-bold text-white mb-3">Search by Image</h3>
-                <p className="text-slate-300 text-center text-lg max-w-[300px]">Upload a photo to find this person in the database.</p>
-                <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-              </label>
+              )}
 
-              {/* Video Upload */}
-              <label className="relative flex flex-col items-center justify-center p-10 md:p-16 bg-slate-800 border border-slate-600 rounded-2xl cursor-pointer hover:border-blue-400 hover:bg-slate-700 transition-all duration-300 group">
-                <div className="bg-slate-900 p-6 rounded-full border border-slate-600 shadow-xl mb-6 group-hover:scale-110 transition-all duration-300">
-                  <Video className="w-12 h-12 text-blue-400" />
+              <div className="grid md:grid-cols-2 gap-8">
+                {/* 1. Image Search (Demo Flow) */}
+                <label className="relative flex flex-col items-center justify-center p-8 md:p-12 bg-slate-800 border-2 border-slate-600 rounded-2xl cursor-pointer hover:border-cyan-400 hover:bg-slate-750 transition-all duration-300 group shadow-lg">
+                  <div className="bg-slate-900 p-5 rounded-full border border-slate-600 shadow-xl mb-5 group-hover:scale-110 transition-all duration-300">
+                    <ImageIcon className="w-10 h-10 text-cyan-400" />
+                  </div>
+                  <h3 className="text-2xl font-bold text-white mb-2">Search by Person Image</h3>
+                  <p className="text-slate-300 text-center text-sm max-w-[320px] mb-4">
+                    Upload a query photo to match against curated OSNet embeddings in <code className="text-cyan-400 font-mono">resources.json</code> and retrieve Qdrant evidence.
+                  </p>
+                  <span className="px-4 py-2 bg-cyan-950/60 border border-cyan-500/50 text-cyan-300 rounded-lg text-sm font-semibold group-hover:bg-cyan-500 group-hover:text-slate-900 transition-colors">
+                    Upload Query Image
+                  </span>
+                  <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+                </label>
+
+                {/* 2. Ingested CCTV Video Lineup (Phase 2 Demo Curation) */}
+                <div className="relative flex flex-col items-center justify-between p-8 md:p-12 bg-slate-800 border-2 border-slate-600 rounded-2xl shadow-lg hover:border-blue-400 transition-all duration-300">
+                  <div className="flex flex-col items-center text-center">
+                    <div className="bg-slate-900 p-5 rounded-full border border-slate-600 shadow-xl mb-5">
+                      <Video className="w-10 h-10 text-blue-400" />
+                    </div>
+                    <h3 className="text-2xl font-bold text-white mb-2">Phase 2 — Video Track Lineup</h3>
+                    <p className="text-slate-300 text-center text-sm max-w-[340px] mb-4">
+                      Browse previously ingested CCTV videos to select 5–7 visible people and extract their DeepSORT crops.
+                    </p>
+                  </div>
+
+                  <div className="w-full flex flex-col gap-3 mt-2">
+                    <select 
+                      value={selectedCamera} 
+                      onChange={(e) => setSelectedCamera(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-600 text-white px-4 py-2.5 rounded-lg text-sm font-semibold focus:outline-none focus:border-blue-400"
+                    >
+                      {ingestedVideos.length > 0 ? (
+                        ingestedVideos.map(v => (
+                          <option key={v.camera_id} value={v.camera_id}>{v.label || v.filename}</option>
+                        ))
+                      ) : (
+                        <>
+                          <option value="Camera_1">Camera 1 (cam_1.mp4)</option>
+                          <option value="Camera_2">Camera 2 (cam_2.mp4)</option>
+                          <option value="Camera_3">Camera 3 (cam_3.mp4)</option>
+                          <option value="Camera_4">Camera 4 (cam_4.mp4)</option>
+                        </>
+                      )}
+                    </select>
+
+                    <button 
+                      onClick={() => handleLoadIngestedLineup(selectedCamera)}
+                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg text-sm transition-colors shadow flex items-center justify-center gap-2"
+                    >
+                      Browse Tracked People & Crops
+                    </button>
+                  </div>
                 </div>
-                <h3 className="text-3xl font-bold text-white mb-3">Search by Video</h3>
-                <p className="text-slate-300 text-center text-lg max-w-[300px]">Upload a video clip to track and identify a person.</p>
-                <input type="file" accept="video/*" className="hidden" onChange={handleVideoUpload} />
-              </label>
+              </div>
+
+              {/* Auxiliary Quick Links & Ad-Hoc Upload */}
+              <div className="flex flex-col sm:flex-row items-center justify-between p-4 bg-slate-850/60 rounded-xl border border-slate-700 text-sm gap-4">
+                <div className="flex items-center gap-2 text-slate-300">
+                  <ExternalLink size={16} className="text-emerald-400" />
+                  <span>Phase 3 Tool:</span>
+                  <a href="http://localhost:8000/vector-tool" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline font-semibold flex items-center gap-1">
+                    Open OSNet Vector Studio & Manifest Tool
+                  </a>
+                </div>
+                <label className="text-slate-400 hover:text-white cursor-pointer underline text-xs">
+                  Or upload a new video clip directly
+                  <input type="file" accept="video/*" className="hidden" onChange={handleVideoUpload} />
+                </label>
+              </div>
             </div>
           )}
 
           {view === 'lineup' && (
             <div className="w-full relative z-10 flex flex-col h-full">
-              <div className="text-center mb-10">
-                <h2 className="text-4xl font-bold text-white mb-3">Select a Person</h2>
-                <p className="text-slate-300 text-xl">We found <span className="text-cyan-400 font-bold px-1">{thumbnails.length}</span> people in the video. Click on the one you want to search for.</p>
+              {/* Lineup Header & Controls */}
+              <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 mb-8 border-b border-slate-700 pb-6">
+                <div>
+                  <h2 className="text-3xl font-bold text-white flex items-center gap-3">
+                    DeepSORT Person Lineup
+                  </h2>
+                  <p className="text-slate-300 text-base mt-1">
+                    Displaying <span className="text-cyan-400 font-bold">{thumbnails.length}</span> people tracked in <span className="text-blue-400 font-bold">{selectedCamera}</span>. Select 5–7 clearly visible people for the demo.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                  {/* Camera Switcher Dropdown */}
+                  <select 
+                    value={selectedCamera} 
+                    onChange={(e) => handleLoadIngestedLineup(e.target.value)}
+                    className="bg-slate-900 border border-slate-600 text-white px-4 py-2 rounded-lg text-sm font-semibold focus:outline-none focus:border-cyan-400"
+                  >
+                    {ingestedVideos.map(v => (
+                      <option key={v.camera_id} value={v.camera_id}>{v.label || v.filename}</option>
+                    ))}
+                  </select>
+
+                  {/* Vector Studio Link */}
+                  <a 
+                    href="http://localhost:8000/vector-tool" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-4 py-2 bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-500/50 text-emerald-300 rounded-lg text-sm font-semibold transition-colors"
+                  >
+                    <ExternalLink size={16} /> Open Vector Studio
+                  </a>
+                </div>
               </div>
               
+              {/* Grid of Tracked Persons */}
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6 w-full pb-8">
-                {thumbnails.map(thumb => (
-                  <button 
-                    key={thumb.track_id}
-                    onClick={() => handleTargetSelect(thumb.track_id)}
-                    className="flex flex-col items-center bg-slate-800 border border-slate-600 rounded-xl overflow-hidden shadow-lg hover:border-cyan-400 hover:bg-slate-700 transition-all duration-300 group p-3 relative hover:-translate-y-1"
-                  >
-                    <div className="w-full relative overflow-hidden rounded-lg bg-slate-900">
-                      <img 
-                        src={`data:image/jpeg;base64,${thumb.thumbnail_base64}`} 
-                        alt={`Target ${thumb.track_id}`}
-                        className="w-full aspect-square object-cover opacity-90 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500"
-                      />
+                {thumbnails.map(thumb => {
+                  const tidDisplay = thumb.local_track_id || thumb.track_id;
+                  const imgSrc = thumb.crop 
+                    ? (thumb.crop.startsWith('data:') ? thumb.crop : `data:image/jpeg;base64,${thumb.crop}`)
+                    : (thumb.thumbnail_base64 ? `data:image/jpeg;base64,${thumb.thumbnail_base64}` : '');
+                  const isCopied = copiedTrack === tidDisplay;
+
+                  return (
+                    <div 
+                      key={thumb.track_id}
+                      className="flex flex-col items-center bg-slate-800 border border-slate-600 rounded-xl overflow-hidden shadow-lg hover:border-cyan-400 transition-all duration-300 group p-3 relative"
+                    >
+                      <div className="w-full relative overflow-hidden rounded-lg bg-slate-900 cursor-pointer" onClick={() => handleTargetSelect(thumb.track_id)}>
+                        <img 
+                          src={imgSrc} 
+                          alt={`Target ${tidDisplay}`}
+                          className="w-full aspect-square object-cover opacity-90 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500"
+                        />
+                      </div>
+
+                      <div className="mt-3 mb-1 flex flex-col items-center justify-center w-full text-center">
+                        <span className="font-bold text-white text-base">Track #{tidDisplay}</span>
+                        <span className="text-xs text-slate-400 mt-0.5">
+                          {thumb.camera_id || selectedCamera} | {thumb.start_time_str} - {thumb.end_time_str}
+                        </span>
+                        {thumb.duration && (
+                          <span className="text-[11px] text-cyan-400 font-semibold mt-0.5">
+                            Duration: {thumb.duration}s
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="w-full grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-700/60">
+                        <button
+                          onClick={() => copyToClipboard(String(thumb.track_id), tidDisplay)}
+                          className="flex items-center justify-center gap-1 py-1.5 px-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold rounded transition-colors"
+                          title="Copy Track ID for resources.json"
+                        >
+                          {isCopied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                          {isCopied ? 'Copied' : 'Copy ID'}
+                        </button>
+
+                        <button 
+                          onClick={() => handleTargetSelect(thumb.track_id)}
+                          className="py-1.5 px-2 bg-cyan-900/60 hover:bg-cyan-800 text-cyan-300 text-xs font-semibold rounded transition-colors text-center"
+                        >
+                          Select
+                        </button>
+                      </div>
                     </div>
-                    <div className="mt-4 mb-2 flex items-center justify-center w-full">
-                      <span className="font-semibold text-white text-lg">Person #{thumb.track_id}</span>
-                    </div>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -389,10 +585,19 @@ function App() {
                         
                         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4 border-b border-slate-700 pb-6">
                           <div className="flex flex-col">
-                            <span className="text-2xl font-bold text-white flex items-center gap-2">
-                              {match.metadata?.location || "Unknown Location"}
+                            <div className="flex items-center gap-3">
+                              <span className="text-2xl font-bold text-white flex items-center gap-2">
+                                {match.metadata?.location || match.metadata?.camera_id || "CCTV Camera"}
+                              </span>
+                              {matchedLabel && (
+                                <span className="px-3 py-1 bg-cyan-950/70 border border-cyan-500/50 text-cyan-300 rounded-md text-xs font-semibold">
+                                  Identity: {matchedLabel}
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-slate-400 mt-2 text-base">
+                              Track ID: <code className="text-cyan-300 font-mono">{match.metadata?.track_id || match.target_id.split("-")[0]}</code>
                             </span>
-                            <span className="text-slate-400 mt-2 text-lg">ID: {match.target_id.split("-")[0]}</span>
                           </div>
                           <div className="flex flex-wrap items-center gap-4">
                             <span className={`px-5 py-2 text-lg font-bold rounded-lg border ${confidenceColor}`}>
